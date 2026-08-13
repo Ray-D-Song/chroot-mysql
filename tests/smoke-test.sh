@@ -42,7 +42,7 @@ wait_for_mysql() {
 }
 
 wait_for_mysql
-mysql_exec -e 'create database ci_smoke' -e 'create table ci_smoke.records(id int primary key, note varchar(32))' -e "insert into ci_smoke.records values (1, 'ok')" -e 'select * from ci_smoke.records'
+mysql_exec -e "create database ci_smoke; create table ci_smoke.records(id int primary key, note varchar(32)); insert into ci_smoke.records values (1, 'ok'); select * from ci_smoke.records;"
 systemctl restart "$SERVICE"
 wait_for_mysql
 mysql_exec -Nse 'select note from ci_smoke.records where id = 1' | grep -Fx ok
@@ -51,4 +51,3 @@ mysql_exec -Nse 'select note from ci_smoke.records where id = 1' | grep -Fx ok
 "$PACKAGE_DIR/uninstall.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS" --purge-data
 [[ ! -e "$DATA_DIR" ]] || { echo 'purge-data did not remove test data' >&2; exit 1; }
 echo 'chroot-mysql smoke test passed'
-

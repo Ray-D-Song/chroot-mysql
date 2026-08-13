@@ -96,6 +96,8 @@ bind-address=$BIND_ADDRESS
 skip-name-resolve
 mysqlx=0
 EOF
+chown root:root "$PREFIX/rootfs/etc/mysql/chroot-mysql.cnf"
+chmod 0644 "$PREFIX/rootfs/etc/mysql/chroot-mysql.cnf"
 
 if [[ ! -d "$DATA_DIR/mysql" ]]; then
   password="$(openssl rand -hex 24)"
