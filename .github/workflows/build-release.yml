@@ -112,6 +112,7 @@ jobs:
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           test -n "$RELEASE_TAG"
@@ -155,4 +156,3 @@ jobs:
               gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id"
               echo "Deleted artifact $artifact_id from run $GITHUB_RUN_ID"
             done
-
