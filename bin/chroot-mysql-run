@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOTFS=''
+DATA_DIR=''
+RUN_UID=''
+RUN_GID=''
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rootfs|--data-dir|--uid|--gid)
+      key="$1"; shift; [[ $# -gt 0 ]] || { echo "missing value for $key" >&2; exit 2; }
+      case "$key" in
+        --rootfs) ROOTFS="$1" ;;
+        --data-dir) DATA_DIR="$1" ;;
+        --uid) RUN_UID="$1" ;;
+        --gid) RUN_GID="$1" ;;
+      esac
+      shift ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+[[ $EUID -eq 0 ]] || { echo 'chroot-mysql-run must be run by root' >&2; exit 1; }
+[[ -d "$ROOTFS" && -d "$DATA_DIR" ]] || { echo 'rootfs or data directory does not exist' >&2; exit 1; }
+[[ "$RUN_UID" =~ ^[0-9]+$ && "$RUN_GID" =~ ^[0-9]+$ ]] || { echo 'invalid numeric argument' >&2; exit 2; }
+
+mkdir -p "$ROOTFS/var/lib/mysql" "$ROOTFS/run/mysqld" "$ROOTFS/dev/shm"
+mount --bind "$DATA_DIR" "$ROOTFS/var/lib/mysql"
+mount --bind /dev/shm "$ROOTFS/dev/shm"
+exec chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" /usr/sbin/mysqld --defaults-file=/etc/mysql/chroot-mysql.cnf
+

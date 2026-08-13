@@ -1,0 +1,20 @@
+[Unit]
+Description=chroot-mysql MySQL 8.4
+After=network.target local-fs.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+MountFlags=private
+ExecStart=@PREFIX@/bin/chroot-mysql-run --rootfs @PREFIX@/rootfs --data-dir @DATA_DIR@ --uid @RUN_UID@ --gid @RUN_GID@
+KillSignal=SIGTERM
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+
