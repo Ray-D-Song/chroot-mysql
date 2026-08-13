@@ -1,37 +1,34 @@
 # chroot-mysql
 
-`chroot-mysql` ships MySQL Community Server 8.4 LTS in a Debian 12 AMD64 chroot for offline Linux deployments. The database rootfs is isolated under `/opt`, while data and generated credentials remain on the host.
+离线 MySQL Community Server 8.4 LTS 发行包，使用 Debian 12 AMD64 chroot 运行环境，供没有外网或宿主发行版不固定的 Linux 服务器使用。
 
-## Install
+## 构建与发布
 
-Unpack a release and run:
+`versions.env` 锁定 MySQL 官方 APT 仓库的精确包版本。推送分支或 Pull Request 时 GitHub Actions 构建并验证；推送 `v*` tag 后，只有 Ubuntu 24 Hosted Runner 与自建 CentOS 7 / Linux 3.10 Runner 都通过验证，才会创建 GitHub Release。
+
+自建 Runner 必须包含标签：`self-hosted`、`linux`、`x64`、`centos7-kernel310-mysql`，并且允许无交互 `sudo`。它会真实安装、启动 systemd 服务、使用密码连接 MySQL、重启并验证数据持久化。
+
+非 Release 的工作流和失败工作流都会在结束时删除本次构建 Artifact，避免持续占用仓库空间。
+
+## 安装发行包
 
 ```bash
+tar -xzf chroot-mysql-<version>-linux-amd64.tar.gz
+cd chroot-mysql-<version>-linux-amd64
 sudo ./install.sh
 sudo systemctl status chroot-mysql
 sudo cat /etc/chroot-mysql/credentials
 ```
 
-Defaults are `0.0.0.0:3306`, `/opt/chroot-mysql`, `/var/lib/chroot-mysql/data`, and `/etc/chroot-mysql/credentials`. The first installation creates a random MySQL root password. MySQL X Protocol is disabled; firewall policy remains the deployer's responsibility.
+默认路径为 `/opt/chroot-mysql`（rootfs）、`/var/lib/chroot-mysql/data`（数据）和 `/etc/chroot-mysql/credentials`（凭据）；数据目录不会随普通卸载或升级删除。
 
-Use alternate locations or a port when needed:
+默认监听 `0.0.0.0:3306`，远程连接使用 MySQL 8.4 默认的 `caching_sha2_password` 认证。安装生成随机 `root` 密码，并禁用 MySQL X Protocol（33060）；生产使用前必须通过防火墙限制来源地址。
+
+可覆盖默认值：
 
 ```bash
 sudo ./install.sh --prefix /opt/chroot-mysql --data-dir /var/lib/chroot-mysql/data \
-  --port 3306 --bind-address 0.0.0.0
+  --port 3306 --bind-address '127.0.0.1'
 ```
 
-`sudo ./uninstall.sh` removes the service and rootfs but preserves data and credentials. Use `sudo ./uninstall.sh --purge-data` only when the database is no longer needed.
-
-## Build
-
-On Debian/Ubuntu AMD64 with `debootstrap`, `curl`, and GnuPG:
-
-```bash
-sudo bash scripts/build-rootfs.sh
-sudo bash tests/verify-rootfs.sh build/rootfs
-sudo bash scripts/package.sh local
-```
-
-The exact MySQL package version is locked in `versions.env`.
-
+`sudo ./uninstall.sh` 删除服务和 rootfs、保留数据；仅在确认不再需要数据库时使用 `sudo ./uninstall.sh --purge-data`。
