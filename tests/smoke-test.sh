@@ -88,10 +88,11 @@ wait_for_mysql "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$MYSQL_USER" "$MYSQL_PASSWORD"
 mysql_exec "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$MYSQL_USER" "$MYSQL_PASSWORD" -Nse 'select 1' | grep -Fx 1
 
 systemctl stop "$CUSTOM_SERVICE"
-CHROOT_MYSQL_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
+reinstall_output="$(CHROOT_MYSQL_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
   --prefix "$CUSTOM_PREFIX" --data-dir "$CUSTOM_DATA_DIR" --service-name "$CUSTOM_SERVICE" \
   --credentials-file "$CUSTOM_CREDENTIALS" --port "$CUSTOM_PORT" --bind-address 127.0.0.1 \
-  --password "$OTHER_PASSWORD" 2>&1 | grep -q 'ignored' || { echo 'reinstall did not warn about ignored password' >&2; exit 1; }
+  --password "$OTHER_PASSWORD" 2>&1)"
+grep -q 'ignored' <<<"$reinstall_output" || { echo 'reinstall did not warn about ignored password' >&2; exit 1; }
 systemctl is-active --quiet "$CUSTOM_SERVICE"
 source "$CUSTOM_CREDENTIALS"
 [[ "$MYSQL_PASSWORD" == "$CUSTOM_PASSWORD" ]] || { echo 'reinstall changed the stored password' >&2; exit 1; }
