@@ -30,14 +30,20 @@ systemctl is-active --quiet "$SERVICE"
 source "$CREDENTIALS"
 
 mysql_exec() {
-  MYSQL_PWD="$MYSQL_PASSWORD" chroot "$PREFIX/rootfs" /usr/bin/mysql --protocol=TCP -h 127.0.0.1 -P "$PORT" -u "$MYSQL_USER" "$@"
+  local prefix="$PREFIX" port="$PORT" user="$MYSQL_USER" password="$MYSQL_PASSWORD"
+  if [[ $# -ge 4 && "$1" == /* ]]; then
+    prefix="$1" port="$2" user="$3" password="$4"
+    shift 4
+  fi
+  MYSQL_PWD="$password" chroot "$prefix/rootfs" /usr/bin/mysql --protocol=TCP -h 127.0.0.1 -P "$port" -u "$user" "$@"
 }
 wait_for_mysql() {
+  local prefix="${1:-$PREFIX}" port="${2:-$PORT}" user="${3:-$MYSQL_USER}" password="${4:-$MYSQL_PASSWORD}"
   for _ in $(seq 1 30); do
-    if mysql_exec -e 'select 1' >/dev/null 2>&1; then return 0; fi
+    if mysql_exec "$prefix" "$port" "$user" "$password" -e 'select 1' >/dev/null 2>&1; then return 0; fi
     sleep 1
   done
-  echo "MySQL did not become ready on port $PORT" >&2
+  echo "MySQL did not become ready on port $port" >&2
   return 1
 }
 
@@ -78,7 +84,8 @@ CHROOT_MYSQL_PASSWORD="$CUSTOM_PASSWORD" "$PACKAGE_DIR/install.sh" \
 systemctl is-active --quiet "$CUSTOM_SERVICE"
 source "$CUSTOM_CREDENTIALS"
 [[ "$MYSQL_PASSWORD" == "$CUSTOM_PASSWORD" ]] || { echo 'custom password was not stored in credentials' >&2; exit 1; }
-MYSQL_PWD="$MYSQL_PASSWORD" chroot "$CUSTOM_PREFIX/rootfs" /usr/bin/mysql --protocol=TCP -h 127.0.0.1 -P "$CUSTOM_PORT" -u "$MYSQL_USER" -Nse 'select 1' | grep -Fx 1
+wait_for_mysql "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$MYSQL_USER" "$MYSQL_PASSWORD"
+mysql_exec "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$MYSQL_USER" "$MYSQL_PASSWORD" -Nse 'select 1' | grep -Fx 1
 
 systemctl stop "$CUSTOM_SERVICE"
 CHROOT_MYSQL_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
@@ -88,7 +95,8 @@ CHROOT_MYSQL_PASSWORD="$OTHER_PASSWORD" "$PACKAGE_DIR/install.sh" \
 systemctl is-active --quiet "$CUSTOM_SERVICE"
 source "$CUSTOM_CREDENTIALS"
 [[ "$MYSQL_PASSWORD" == "$CUSTOM_PASSWORD" ]] || { echo 'reinstall changed the stored password' >&2; exit 1; }
-MYSQL_PWD="$MYSQL_PASSWORD" chroot "$CUSTOM_PREFIX/rootfs" /usr/bin/mysql --protocol=TCP -h 127.0.0.1 -P "$CUSTOM_PORT" -u "$MYSQL_USER" -Nse 'select 1' | grep -Fx 1
+wait_for_mysql "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$MYSQL_USER" "$MYSQL_PASSWORD"
+mysql_exec "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$MYSQL_USER" "$MYSQL_PASSWORD" -Nse 'select 1' | grep -Fx 1
 
 custom_cleanup
 trap - EXIT
