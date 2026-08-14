@@ -22,13 +22,19 @@ sudo cat /etc/chroot-mysql/credentials
 
 默认路径为 `/opt/chroot-mysql`（rootfs）、`/var/lib/chroot-mysql/data`（数据）和 `/etc/chroot-mysql/credentials`（凭据）；数据目录不会随普通卸载或升级删除。
 
-默认监听 `0.0.0.0:3306`，远程连接使用 MySQL 8.4 默认的 `caching_sha2_password` 认证。安装生成随机 `root` 密码，并禁用 MySQL X Protocol（33060）；生产使用前必须通过防火墙限制来源地址。
+默认监听 `0.0.0.0:3306`，远程连接使用 MySQL 8.4 默认的 `caching_sha2_password` 认证。安装时生成随机 `root` 密码，或通过 `--password` / `CHROOT_MYSQL_PASSWORD` 指定，并禁用 MySQL X Protocol（33060）；生产使用前必须通过防火墙限制来源地址。
+
+密码来源（仅全新实例）：`--password` > `CHROOT_MYSQL_PASSWORD` > 随机生成。已有数据目录时传入密码会被忽略并警告，密码以 credentials 文件为准。自动化场景优先使用环境变量：
+
+```bash
+sudo CHROOT_MYSQL_PASSWORD='your-secret-here' ./install.sh
+```
 
 可覆盖默认值：
 
 ```bash
 sudo ./install.sh --prefix /opt/chroot-mysql --data-dir /var/lib/chroot-mysql/data \
-  --port 3306 --bind-address '127.0.0.1'
+  --port 3306 --bind-address '127.0.0.1' --password 'your-secret-here'
 ```
 
 `sudo ./uninstall.sh` 删除服务和 rootfs、保留数据；仅在确认不再需要数据库时使用 `sudo ./uninstall.sh --purge-data`。

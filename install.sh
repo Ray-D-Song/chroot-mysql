@@ -8,6 +8,7 @@ SERVICE_NAME=chroot-mysql
 RUN_USER=chroot-mysql
 PORT=3306
 BIND_ADDRESS=0.0.0.0
+PASSWORD_CLI=''
 
 usage() {
   cat <<EOF
@@ -18,12 +19,56 @@ Usage: sudo ./install.sh [options]
   --bind-address ADDRESS    MySQL bind address (default: $BIND_ADDRESS)
   --service-name NAME       systemd service name (default: $SERVICE_NAME)
   --credentials-file PATH   Root-only credentials file (default: $CREDENTIALS)
+  --password VALUE          root password for a new instance (or set CHROOT_MYSQL_PASSWORD)
 EOF
+}
+
+validate_password() {
+  local pw="$1"
+  [[ -n "$pw" ]] || { echo 'password must not be empty' >&2; exit 2; }
+  (( ${#pw} >= 8 )) || { echo 'password must be at least 8 characters' >&2; exit 2; }
+  [[ "$pw" != *$'\n'* && "$pw" != *$'\0'* ]] || { echo 'password must not contain newline or null bytes' >&2; exit 2; }
+  [[ ! "$pw" =~ [[:cntrl:]] ]] || { echo 'password must not contain control characters' >&2; exit 2; }
+}
+
+password_was_provided() {
+  [[ -n "$PASSWORD_CLI" || -n "${CHROOT_MYSQL_PASSWORD:-}" ]]
+}
+
+warn_if_password_ignored() {
+  if password_was_provided; then
+    echo 'Warning: existing data directory detected; --password and CHROOT_MYSQL_PASSWORD were ignored.' >&2
+  fi
+}
+
+resolve_password_for_new_install() {
+  if [[ -n "$PASSWORD_CLI" ]]; then
+    password="$PASSWORD_CLI"
+    echo "Using password from --password. It will be stored in $CREDENTIALS (root only)."
+  elif [[ -n "${CHROOT_MYSQL_PASSWORD:-}" ]]; then
+    password="$CHROOT_MYSQL_PASSWORD"
+    echo "Using password from CHROOT_MYSQL_PASSWORD. It will be stored in $CREDENTIALS (root only)."
+  else
+    password="$(openssl rand -hex 24)"
+    echo "Generated MySQL root password. It is stored in $CREDENTIALS (root only)."
+  fi
+  validate_password "$password"
+}
+
+read_credentials_password() {
+  password="$(awk -F= '$1 == "MYSQL_PASSWORD" { print substr($0, index($0, "=") + 1) }' "$CREDENTIALS")"
+  [[ -n "$password" ]] || { echo "credentials file has no MYSQL_PASSWORD: $CREDENTIALS" >&2; exit 1; }
+}
+
+escape_sql_string() {
+  local s="$1"
+  s="${s//\'/\'\'}"
+  printf '%s' "$s"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --prefix|--data-dir|--port|--bind-address|--service-name|--credentials-file)
+    --prefix|--data-dir|--port|--bind-address|--service-name|--credentials-file|--password)
       key="$1"; shift; [[ $# -gt 0 ]] || { echo "missing value for $key" >&2; exit 2; }
       case "$key" in
         --prefix) PREFIX="$1" ;;
@@ -32,6 +77,7 @@ while [[ $# -gt 0 ]]; do
         --bind-address) BIND_ADDRESS="$1" ;;
         --service-name) SERVICE_NAME="$1" ;;
         --credentials-file) CREDENTIALS="$1" ;;
+        --password) PASSWORD_CLI="$1" ;;
       esac
       shift ;;
     --help|-h) usage; exit 0 ;;
@@ -100,7 +146,8 @@ chown root:root "$PREFIX/rootfs/etc/mysql/chroot-mysql.cnf"
 chmod 0644 "$PREFIX/rootfs/etc/mysql/chroot-mysql.cnf"
 
 if [[ ! -d "$DATA_DIR/mysql" ]]; then
-  password="$(openssl rand -hex 24)"
+  resolve_password_for_new_install
+  sql_password="$(escape_sql_string "$password")"
   umask 077
   cat > "$CREDENTIALS" <<EOF
 MYSQL_USER=root
@@ -119,8 +166,8 @@ EOF
     sleep 1
   done
   chroot "$PREFIX/rootfs" /usr/bin/mysql --protocol=socket --socket=/run/mysqld/bootstrap.sock -u root <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '$password';
-CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '$password';
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$sql_password';
+CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '$sql_password';
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 EOF
@@ -128,9 +175,10 @@ EOF
   wait "$bootstrap_pid" || true
   cleanup_mounts
   trap - EXIT
-  echo "Generated MySQL root password. It is stored in $CREDENTIALS (root only)."
 else
   [[ -f "$CREDENTIALS" ]] || { echo "existing data directory requires credentials file: $CREDENTIALS" >&2; exit 1; }
+  read_credentials_password
+  warn_if_password_ignored
 fi
 
 sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@DATA_DIR@|$DATA_DIR|g" -e "s|@RUN_UID@|$RUN_UID|g" -e "s|@RUN_GID@|$RUN_GID|g" \
