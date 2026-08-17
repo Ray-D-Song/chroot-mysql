@@ -22,7 +22,9 @@ sudo cat /etc/chroot-mysql/credentials
 
 默认路径为 `/opt/chroot-mysql`（rootfs）、`/var/lib/chroot-mysql/data`（数据）和 `/etc/chroot-mysql/credentials`（凭据）；数据目录不会随普通卸载或升级删除。
 
-默认监听 `0.0.0.0:3306`，远程连接使用 MySQL 8.4 默认的 `caching_sha2_password` 认证。安装时生成随机 `root` 密码，或通过 `--password` / `CHROOT_MYSQL_PASSWORD` 指定，并禁用 MySQL X Protocol（33060）；生产使用前必须通过防火墙限制来源地址。
+默认监听 `0.0.0.0:3306`，新实例启用 `lower_case_table_names=1`，表名大小写不敏感。远程连接使用 MySQL 8.4 默认的 `caching_sha2_password` 认证。安装时生成随机 `root` 密码，或通过 `--password` / `CHROOT_MYSQL_PASSWORD` 指定，并禁用 MySQL X Protocol（33060）；生产使用前必须通过防火墙限制来源地址。
+
+`lower_case_table_names` 必须在初始化数据目录前确定。已有数据目录重新安装时会保留此前配置，不会直接切换大小写策略；如需将旧实例迁移为大小写不敏感，必须先导出数据，再使用新数据目录初始化并导入。
 
 密码来源（仅全新实例）：`--password` > `CHROOT_MYSQL_PASSWORD` > 随机生成。已有数据目录时传入密码会被忽略并警告，密码以 credentials 文件为准。自动化场景优先使用环境变量：
 

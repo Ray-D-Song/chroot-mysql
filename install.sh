@@ -62,6 +62,29 @@ read_credentials_password() {
   [[ -n "$password" ]] || { echo "credentials file has no MYSQL_PASSWORD: $CREDENTIALS" >&2; exit 1; }
 }
 
+resolve_lower_case_table_names() {
+  LOWER_CASE_TABLE_NAMES_CONFIG=''
+  if [[ ! -d "$DATA_DIR/mysql" ]]; then
+    LOWER_CASE_TABLE_NAMES_CONFIG=$'lower_case_table_names=1\n'
+    return
+  fi
+
+  local previous_config="$PREFIX/rootfs/etc/mysql/chroot-mysql.cnf"
+  if [[ -f "$previous_config" ]]; then
+    local previous_value
+    previous_value="$(awk -F= '
+      $1 ~ /^[[:space:]]*lower_case_table_names[[:space:]]*$/ { value = $2 }
+      END {
+        gsub(/[[:space:]]/, "", value)
+        if (value == "0" || value == "1") print value
+      }
+    ' "$previous_config")"
+    if [[ -n "$previous_value" ]]; then
+      LOWER_CASE_TABLE_NAMES_CONFIG="lower_case_table_names=$previous_value"$'\n'
+    fi
+  fi
+}
+
 escape_sql_string() {
   local s="$1"
   s="${s//\'/\'\'}"
@@ -98,6 +121,7 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_ROOTFS="$SCRIPT_DIR/rootfs"
 [[ -x "$SOURCE_ROOTFS/usr/sbin/mysqld" ]] || { echo "rootfs is missing from $SOURCE_ROOTFS" >&2; exit 1; }
+resolve_lower_case_table_names
 
 if ! id "$RUN_USER" >/dev/null 2>&1; then
   useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin "$RUN_USER"
@@ -141,7 +165,7 @@ socket=/run/mysqld/mysqld.sock
 pid-file=/run/mysqld/mysqld.pid
 port=$PORT
 bind-address=$BIND_ADDRESS
-skip-name-resolve
+${LOWER_CASE_TABLE_NAMES_CONFIG}skip-name-resolve
 mysqlx=0
 EOF
 chown root:root "$PREFIX/rootfs/etc/mysql/chroot-mysql.cnf"
