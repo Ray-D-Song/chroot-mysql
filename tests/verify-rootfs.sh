@@ -7,9 +7,9 @@ source "$ROOT_DIR/versions.env"
 
 [[ -x "$ROOTFS/usr/sbin/mysqld" ]] || { echo 'mysqld missing from rootfs' >&2; exit 1; }
 [[ -x "$ROOTFS/usr/bin/mysql" ]] || { echo 'mysql client missing from rootfs' >&2; exit 1; }
+[[ -x "$ROOTFS/opt/percona-xtrabackup/bin/xtrabackup" ]] || { echo 'xtrabackup missing from rootfs' >&2; exit 1; }
 server_version="$(chroot "$ROOTFS" dpkg-query -W -f='${Version}' mysql-community-server)"
 client_version="$(chroot "$ROOTFS" dpkg-query -W -f='${Version}' mysql-client)"
 [[ "$server_version" == "$MYSQL_PACKAGE_VERSION" ]] || { echo "server version mismatch: $server_version" >&2; exit 1; }
 [[ "$client_version" == "$MYSQL_PACKAGE_VERSION" ]] || { echo "client version mismatch: $client_version" >&2; exit 1; }
 echo "verified MySQL $server_version"
-

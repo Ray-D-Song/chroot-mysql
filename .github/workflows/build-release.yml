@@ -46,6 +46,8 @@ jobs:
         run: |
           (cd dist && sha256sum --check SHA256SUMS)
           tar -tzf dist/chroot-mysql-*-linux-amd64.tar.gz | grep -E '/rootfs/usr/sbin/mysqld$'
+          tar -tzf dist/chroot-mysql-*-linux-amd64.tar.gz | grep -E '/rootfs/opt/percona-xtrabackup/bin/xtrabackup$'
+          tar -tzf dist/chroot-mysql-*-linux-amd64.tar.gz | grep -E '/bin/chroot-mysql-pxb$'
       - uses: actions/upload-artifact@v4
         with:
           name: chroot-mysql-release

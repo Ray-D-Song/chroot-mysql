@@ -22,6 +22,11 @@ sudo cat /etc/chroot-mysql/credentials
 
 默认路径为 `/opt/chroot-mysql`（rootfs）、`/var/lib/chroot-mysql/data`（数据）和 `/etc/chroot-mysql/credentials`（凭据）；数据目录不会随普通卸载或升级删除。
 
+发行包还包含与 MySQL 8.4 对齐的 Percona XtraBackup。JarMaster 通过
+`/opt/chroot-mysql/bin/chroot-mysql-pxb` 调用它；该命令把备份集临时挂载到
+chroot 内并只输出最终 JSON 到 stdout，诊断和进度写入 stderr。它是供
+JarMaster 使用的管理接口，不需要在宿主机安装 PXB。
+
 默认监听 `0.0.0.0:3306`，新实例启用 `lower_case_table_names=1`，表名大小写不敏感。远程连接使用 MySQL 8.4 默认的 `caching_sha2_password` 认证。安装时生成随机 `root` 密码，或通过 `--password` / `CHROOT_MYSQL_PASSWORD` 指定，并禁用 MySQL X Protocol（33060）；生产使用前必须通过防火墙限制来源地址。
 
 `lower_case_table_names` 必须在初始化数据目录前确定。已有数据目录重新安装时会保留此前配置，不会直接切换大小写策略；如需将旧实例迁移为大小写不敏感，必须先导出数据，再使用新数据目录初始化并导入。

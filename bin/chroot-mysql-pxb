@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run the PXB bundled inside the MySQL chroot. stdout is deliberately reserved
+# for the final JSON result; PXB's own output is forwarded to stderr.
+ROOTFS=/opt/chroot-mysql/rootfs
+DATA_DIR=/var/lib/chroot-mysql/data
+CREDENTIALS=/etc/chroot-mysql/credentials
+BACKUP_DIR=''
+MYSQL_HOST=127.0.0.1
+MYSQL_PORT=3306
+MYSQL_USER=root
+COMPRESS=false
+THROTTLE=0
+RUN_ID=''
+BASE_RUN_ID=''
+OPERATION=''
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: chroot-mysql-pxb [options] <backup-full|backup-incremental|decompress|prepare|copy-back>
+  --rootfs PATH             Installed chroot rootfs
+  --data-dir PATH           Persistent MySQL data directory
+  --credentials-file PATH   Root-only credentials file
+  --backup-dir PATH         Backup set directory (absolute)
+  --host HOST --port PORT --user USER
+  --compress                Compress backup output
+  --throttle-mbps N         Approximate PXB throughput limit; 0 disables it
+  --run-id ID               Incremental run ID
+  --base-run-id ID          Previous incremental run ID, or "full"
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rootfs|--data-dir|--credentials-file|--backup-dir|--host|--port|--user|--throttle-mbps|--run-id|--base-run-id)
+      key="$1"; shift; [[ $# -gt 0 ]] || { echo "missing value for $key" >&2; exit 2; }
+      case "$key" in
+        --rootfs) ROOTFS="$1" ;;
+        --data-dir) DATA_DIR="$1" ;;
+        --credentials-file) CREDENTIALS="$1" ;;
+        --backup-dir) BACKUP_DIR="$1" ;;
+        --host) MYSQL_HOST="$1" ;;
+        --port) MYSQL_PORT="$1" ;;
+        --user) MYSQL_USER="$1" ;;
+        --throttle-mbps) THROTTLE="$1" ;;
+        --run-id) RUN_ID="$1" ;;
+        --base-run-id) BASE_RUN_ID="$1" ;;
+      esac
+      shift ;;
+    --compress) COMPRESS=true; shift ;;
+    --help|-h) usage; exit 0 ;;
+    backup-full|backup-incremental|decompress|prepare|copy-back)
+      [[ -z "$OPERATION" ]] || { echo 'only one operation is allowed' >&2; exit 2; }
+      OPERATION="$1"; shift ;;
+    *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
+  esac
+done
+
+[[ $EUID -eq 0 ]] || { echo 'run chroot-mysql-pxb as root' >&2; exit 1; }
+[[ -n "$OPERATION" && -n "$BACKUP_DIR" ]] || { usage; exit 2; }
+[[ "$ROOTFS" == /* && "$ROOTFS" != / && "$DATA_DIR" == /* && "$DATA_DIR" != / && "$BACKUP_DIR" == /* && "$BACKUP_DIR" != / ]] || { echo 'paths must be non-root absolute paths' >&2; exit 2; }
+[[ -d "$ROOTFS" && -d "$DATA_DIR" && -d "$BACKUP_DIR" ]] || { echo 'rootfs, data directory, or backup directory does not exist' >&2; exit 1; }
+[[ -x "$ROOTFS/opt/percona-xtrabackup/bin/xtrabackup" ]] || { echo 'xtrabackup is missing from the MySQL rootfs' >&2; exit 1; }
+[[ "$MYSQL_PORT" =~ ^[0-9]+$ ]] && (( MYSQL_PORT >= 1 && MYSQL_PORT <= 65535 )) || { echo 'invalid MySQL port' >&2; exit 2; }
+[[ "$THROTTLE" =~ ^[0-9]+$ ]] || { echo 'invalid throttle' >&2; exit 2; }
+[[ "$MYSQL_HOST" =~ ^[a-zA-Z0-9.:_-]+$ && "$MYSQL_USER" =~ ^[a-zA-Z0-9._-]+$ ]] || { echo 'invalid MySQL connection setting' >&2; exit 2; }
+[[ "$RUN_ID" =~ ^[a-zA-Z0-9._-]*$ && "$BASE_RUN_ID" =~ ^[a-zA-Z0-9._-]*$ ]] || { echo 'invalid backup run ID' >&2; exit 2; }
+[[ "$RUN_ID" != . && "$RUN_ID" != .. && "$BASE_RUN_ID" != . && "$BASE_RUN_ID" != .. ]] || { echo 'invalid backup run ID' >&2; exit 2; }
+if [[ "$OPERATION" == backup-incremental ]]; then
+  [[ -n "$RUN_ID" && -n "$BASE_RUN_ID" ]] || { echo 'incremental backup requires --run-id and --base-run-id' >&2; exit 2; }
+fi
+
+MYSQL_PASSWORD="$(awk -F= '$1 == "MYSQL_PASSWORD" { print substr($0, index($0, "=") + 1); exit }' "$CREDENTIALS")"
+[[ -n "$MYSQL_PASSWORD" ]] || { echo "credentials file has no MYSQL_PASSWORD: $CREDENTIALS" >&2; exit 1; }
+
+MOUNT_POINT="$ROOTFS/mnt/chroot-mysql-backup"
+mounted_backup=false
+cleanup() {
+  if "$mounted_backup"; then umount "$MOUNT_POINT" || true; fi
+}
+trap cleanup EXIT
+install -d -m 0755 "$MOUNT_POINT"
+if mountpoint -q "$MOUNT_POINT"; then
+  echo "backup mount point is already in use: $MOUNT_POINT" >&2
+  exit 1
+fi
+mount --bind "$BACKUP_DIR" "$MOUNT_POINT"
+mounted_backup=true
+
+PXB=/opt/percona-xtrabackup/bin/xtrabackup
+CHROOT_BACKUP=/mnt/chroot-mysql-backup
+RUN_UID="$(stat -c %u "$DATA_DIR")"
+RUN_GID="$(stat -c %g "$DATA_DIR")"
+export MYSQL_PWD="$MYSQL_PASSWORD"
+
+run_pxb() {
+  chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" "$PXB" "$@" >&2
+}
+
+base_args=("--host=$MYSQL_HOST" "--port=$MYSQL_PORT" "--user=$MYSQL_USER" --parallel=4)
+if "$COMPRESS"; then base_args+=(--compress); fi
+if (( THROTTLE >= 10 )); then base_args+=("--throttle=$((THROTTLE / 10))"); fi
+
+full_dir="$CHROOT_BACKUP/full"
+case "$OPERATION" in
+  backup-full)
+    run_pxb --backup "--target-dir=$full_dir" "--extra-lsndir=$full_dir.metadata" "${base_args[@]}"
+    result_dir="$full_dir" ;;
+  backup-incremental)
+    if [[ "$BASE_RUN_ID" == full ]]; then base_dir="$full_dir.metadata"; else base_dir="$CHROOT_BACKUP/incremental/$BASE_RUN_ID.metadata"; fi
+    # Releases before compressed PXB support stored checkpoints directly in
+    # the backup directory. Keep their incremental chains usable after upgrade.
+    if [[ ! -f "$MOUNT_POINT/${base_dir#$CHROOT_BACKUP/}/xtrabackup_checkpoints" ]]; then
+      base_dir="${base_dir%.metadata}"
+    fi
+    result_dir="$CHROOT_BACKUP/incremental/$RUN_ID"
+    run_pxb --backup --incremental "--target-dir=$result_dir" "--incremental-basedir=$base_dir" "--extra-lsndir=$result_dir.metadata" "${base_args[@]}" ;;
+  decompress)
+    run_pxb --decompress "--target-dir=$full_dir" --parallel=4
+    if [[ -d "$MOUNT_POINT/incremental" ]]; then
+      while IFS= read -r -d '' dir; do run_pxb --decompress "--target-dir=${dir#$ROOTFS}" --parallel=4; done < <(find "$MOUNT_POINT/incremental" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+    fi
+    result_dir="$full_dir" ;;
+  prepare)
+    run_pxb --prepare --apply-log-only "--target-dir=$full_dir" --parallel=4
+    if [[ -d "$MOUNT_POINT/incremental" ]]; then
+      while IFS= read -r -d '' dir; do run_pxb --prepare --apply-log-only "--target-dir=$full_dir" "--incremental-dir=${dir#$ROOTFS}" --parallel=4; done < <(find "$MOUNT_POINT/incremental" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+    fi
+    run_pxb --prepare "--target-dir=$full_dir" --parallel=4
+    result_dir="$full_dir" ;;
+  copy-back)
+    run_pxb --copy-back "--target-dir=$full_dir" --datadir=/var/lib/mysql --parallel=4
+    result_dir="$full_dir" ;;
+esac
+
+checkpoint="$MOUNT_POINT/${result_dir#$CHROOT_BACKUP/}.metadata/xtrabackup_checkpoints"
+binlog="$MOUNT_POINT/${result_dir#$CHROOT_BACKUP/}.metadata/xtrabackup_binlog_info"
+to_lsn="$(awk -F= '$1 ~ /^[[:space:]]*to_lsn[[:space:]]*$/ { gsub(/[[:space:]]/, "", $2); print $2 }' "$checkpoint" 2>/dev/null || true)"
+read -r binlog_file binlog_position _ < "$binlog" 2>/dev/null || true
+size_bytes="$(du -sb "$MOUNT_POINT/${result_dir#$CHROOT_BACKUP/}" 2>/dev/null | awk '{print $1}')"
+printf '{"path":"%s","sizeBytes":%s,"toLSN":"%s","binlogFile":"%s","binlogPosition":"%s"}\n' \
+  "${result_dir#$CHROOT_BACKUP/}" "${size_bytes:-0}" "$to_lsn" "${binlog_file:-}" "${binlog_position:-}"

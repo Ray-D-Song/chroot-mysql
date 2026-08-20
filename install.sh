@@ -155,6 +155,7 @@ cp -a "$SOURCE_ROOTFS" "$new_rootfs"
 if [[ -d "$PREFIX/rootfs" ]]; then rm -rf "$PREFIX/rootfs"; fi
 mv "$new_rootfs" "$PREFIX/rootfs"
 install -D -m 0755 "$SCRIPT_DIR/bin/chroot-mysql-run" "$PREFIX/bin/chroot-mysql-run"
+install -D -m 0755 "$SCRIPT_DIR/bin/chroot-mysql-pxb" "$PREFIX/bin/chroot-mysql-pxb"
 ensure_chroot_identity "$PREFIX/rootfs"
 install -d -o "$RUN_UID" -g "$RUN_GID" -m 0755 "$PREFIX/rootfs/run/mysqld"
 

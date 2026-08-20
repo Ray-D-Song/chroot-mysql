@@ -10,6 +10,7 @@ SERVICE="chroot-mysql-test-$TEST_ID"
 PORT="$(( 20000 + RANDOM % 20000 ))"
 CREDENTIALS="/etc/chroot-mysql-test-$TEST_ID/credentials"
 PACKAGE_DIR=''
+BACKUP_SET=''
 
 cleanup() {
   if [[ -n "$PACKAGE_DIR" && -x "$PACKAGE_DIR/uninstall.sh" ]]; then
@@ -17,7 +18,7 @@ cleanup() {
   fi
   umount "$PREFIX/rootfs/dev/shm" 2>/dev/null || true
   umount "$PREFIX/rootfs/var/lib/mysql" 2>/dev/null || true
-  rm -rf "$PREFIX" "$DATA_DIR" "$(dirname "$CREDENTIALS")" "$WORK_DIR"
+  rm -rf "$PREFIX" "$DATA_DIR" "$BACKUP_SET" "$(dirname "$CREDENTIALS")" "$WORK_DIR"
 }
 trap cleanup EXIT
 
@@ -27,6 +28,12 @@ PACKAGE_DIR="$(find "$WORK_DIR" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 [[ -n "$PACKAGE_DIR" ]] || { echo 'bundle root directory missing' >&2; exit 1; }
 "$PACKAGE_DIR/install.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS" --port "$PORT" --bind-address 127.0.0.1
 systemctl is-active --quiet "$SERVICE"
+[[ -x "$PREFIX/bin/chroot-mysql-pxb" ]] || { echo 'PXB CLI was not installed' >&2; exit 1; }
+"$PREFIX/bin/chroot-mysql-pxb" --help >/dev/null
+if "$PREFIX/bin/chroot-mysql-pxb" --backup-dir / backup-full >/dev/null 2>&1; then
+  echo 'PXB CLI accepted a root backup directory' >&2
+  exit 1
+fi
 source "$CREDENTIALS"
 grep -Fxq 'lower_case_table_names=1' "$PREFIX/rootfs/etc/mysql/chroot-mysql.cnf"
 
@@ -50,13 +57,28 @@ wait_for_mysql() {
 
 wait_for_mysql
 mysql_exec -e "create database ci_smoke; create table ci_smoke.MixedCaseRecords(id int primary key, note varchar(32)); insert into ci_smoke.MixedCaseRecords values (1, 'ok'); select * from ci_smoke.mixedcaserecords;"
-systemctl restart "$SERVICE"
+BACKUP_SET="$(mktemp -d /tmp/chroot-mysql-pxb-test.XXXXXX)"
+chown "$(stat -c '%u:%g' "$DATA_DIR")" "$BACKUP_SET"
+pxb_args=("$PREFIX/bin/chroot-mysql-pxb" --rootfs "$PREFIX/rootfs" --data-dir "$DATA_DIR" --credentials-file "$CREDENTIALS" --backup-dir "$BACKUP_SET" --host 127.0.0.1 --port "$PORT" --user "$MYSQL_USER")
+"${pxb_args[@]}" --compress backup-full > "$WORK_DIR/pxb-full.json"
+grep -Fq '"toLSN"' "$WORK_DIR/pxb-full.json"
+mysql_exec -e "insert into ci_smoke.MixedCaseRecords values (2, 'after-full');"
+"${pxb_args[@]}" --compress --run-id inc-1 --base-run-id full backup-incremental > "$WORK_DIR/pxb-inc.json"
+grep -Fq '"toLSN"' "$WORK_DIR/pxb-inc.json"
+"${pxb_args[@]}" decompress > "$WORK_DIR/pxb-decompress.json"
+"${pxb_args[@]}" prepare > "$WORK_DIR/pxb-prepare.json"
+systemctl stop "$SERVICE"
+find "$DATA_DIR" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+"${pxb_args[@]}" copy-back > "$WORK_DIR/pxb-copy-back.json"
+systemctl start "$SERVICE"
 wait_for_mysql
-mysql_exec -Nse 'select note from ci_smoke.MIXEDCASERECORDS where id = 1' | grep -Fx ok
+mysql_exec -Nse 'select count(*) from ci_smoke.MIXEDCASERECORDS' | grep -Fx 2
 "$PACKAGE_DIR/uninstall.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS"
 [[ -d "$DATA_DIR/mysql" ]] || { echo 'uninstall unexpectedly removed database data' >&2; exit 1; }
 "$PACKAGE_DIR/uninstall.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS" --purge-data
 [[ ! -e "$DATA_DIR" ]] || { echo 'purge-data did not remove test data' >&2; exit 1; }
+rm -rf "$BACKUP_SET"
+BACKUP_SET=''
 
 # Custom password via environment variable on a fresh install.
 CUSTOM_TEST_ID="${TEST_ID}-custom"
