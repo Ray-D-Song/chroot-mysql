@@ -150,6 +150,9 @@ case "$OPERATION" in
     if [[ ! -f "$MOUNT_POINT/${base_dir#$CHROOT_BACKUP/}/xtrabackup_checkpoints" ]]; then
       base_dir="${base_dir%.metadata}"
     fi
+    # The caller provides the backup-set root.  Create this fixed child here
+    # so PXB, which runs as the MySQL user, can create its run directory.
+    install -d -o "$RUN_UID" -g "$RUN_GID" -m 0755 "$MOUNT_POINT/incremental"
     result_dir="$CHROOT_BACKUP/incremental/$RUN_ID"
     run_pxb --backup "--target-dir=$result_dir" "--incremental-basedir=$base_dir" "${base_args[@]}"
     capture_metadata "$result_dir" ;;
