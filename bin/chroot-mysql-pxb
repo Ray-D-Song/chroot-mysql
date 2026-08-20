@@ -95,7 +95,7 @@ RUN_GID="$(stat -c %g "$DATA_DIR")"
 export MYSQL_PWD="$MYSQL_PASSWORD"
 
 run_pxb() {
-  chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" "$PXB" "$@" >&2
+  LD_LIBRARY_PATH=/usr/lib/private chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" "$PXB" "$@" >&2
 }
 
 base_args=("--host=$MYSQL_HOST" "--port=$MYSQL_PORT" "--user=$MYSQL_USER" --parallel=4)
