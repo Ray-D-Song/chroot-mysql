@@ -62,9 +62,11 @@ chown "$(stat -c '%u:%g' "$DATA_DIR")" "$BACKUP_SET"
 pxb_args=("$PREFIX/bin/chroot-mysql-pxb" --rootfs "$PREFIX/rootfs" --data-dir "$DATA_DIR" --credentials-file "$CREDENTIALS" --backup-dir "$BACKUP_SET" --host 127.0.0.1 --port "$PORT" --user "$MYSQL_USER")
 "${pxb_args[@]}" --compress backup-full > "$WORK_DIR/pxb-full.json"
 grep -Fq '"toLSN"' "$WORK_DIR/pxb-full.json"
+[[ -f "$BACKUP_SET/full.metadata/xtrabackup_checkpoints" ]] || { echo 'full backup metadata is missing' >&2; exit 1; }
 mysql_exec -e "insert into ci_smoke.MixedCaseRecords values (2, 'after-full');"
 "${pxb_args[@]}" --compress --run-id inc-1 --base-run-id full backup-incremental > "$WORK_DIR/pxb-inc.json"
 grep -Fq '"toLSN"' "$WORK_DIR/pxb-inc.json"
+[[ -f "$BACKUP_SET/incremental/inc-1.metadata/xtrabackup_checkpoints" ]] || { echo 'incremental backup metadata is missing' >&2; exit 1; }
 "${pxb_args[@]}" decompress > "$WORK_DIR/pxb-decompress.json"
 "${pxb_args[@]}" prepare > "$WORK_DIR/pxb-prepare.json"
 systemctl stop "$SERVICE"

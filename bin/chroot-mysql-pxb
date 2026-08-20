@@ -113,6 +113,26 @@ run_pxb() {
   LD_LIBRARY_PATH=/usr/lib/private chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" "$PXB" --defaults-extra-file=/run/chroot-mysql-pxb.cnf "$@" >&2
 }
 
+# PXB 8.4 compresses its checkpoint and binlog metadata with the data files.
+# Keep just those small files uncompressed outside the backup so the next
+# incremental run can read its base LSN without expanding the full backup.
+capture_metadata() {
+  local source="$1"
+  chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" /bin/bash -ec '
+    source="$1"
+    metadata="${source}.metadata"
+    mkdir -p "$metadata"
+    for file in xtrabackup_checkpoints xtrabackup_binlog_info; do
+      if [[ -f "$source/$file" ]]; then
+        cp "$source/$file" "$metadata/$file"
+      elif [[ -f "$source/$file.zst" ]]; then
+        zstd --quiet --decompress --stdout "$source/$file.zst" > "$metadata/$file"
+      fi
+    done
+    [[ -f "$metadata/xtrabackup_checkpoints" ]]
+  ' -- "$source" >&2
+}
+
 base_args=("--host=$MYSQL_HOST" "--port=$MYSQL_PORT" "--user=$MYSQL_USER" --parallel=4)
 if "$COMPRESS"; then base_args+=(--compress); fi
 if (( THROTTLE >= 10 )); then base_args+=("--throttle=$((THROTTLE / 10))"); fi
@@ -120,7 +140,8 @@ if (( THROTTLE >= 10 )); then base_args+=("--throttle=$((THROTTLE / 10))"); fi
 full_dir="$CHROOT_BACKUP/full"
 case "$OPERATION" in
   backup-full)
-    run_pxb --backup "--target-dir=$full_dir" "--extra-lsndir=$full_dir.metadata" "${base_args[@]}"
+    run_pxb --backup "--target-dir=$full_dir" "${base_args[@]}"
+    capture_metadata "$full_dir"
     result_dir="$full_dir" ;;
   backup-incremental)
     if [[ "$BASE_RUN_ID" == full ]]; then base_dir="$full_dir.metadata"; else base_dir="$CHROOT_BACKUP/incremental/$BASE_RUN_ID.metadata"; fi
@@ -130,7 +151,8 @@ case "$OPERATION" in
       base_dir="${base_dir%.metadata}"
     fi
     result_dir="$CHROOT_BACKUP/incremental/$RUN_ID"
-    run_pxb --backup --incremental "--target-dir=$result_dir" "--incremental-basedir=$base_dir" "--extra-lsndir=$result_dir.metadata" "${base_args[@]}" ;;
+    run_pxb --backup "--target-dir=$result_dir" "--incremental-basedir=$base_dir" "${base_args[@]}"
+    capture_metadata "$result_dir" ;;
   decompress)
     run_pxb --decompress "--target-dir=$full_dir" --parallel=4
     if [[ -d "$MOUNT_POINT/incremental" ]]; then
