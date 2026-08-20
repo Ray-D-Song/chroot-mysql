@@ -159,13 +159,13 @@ case "$OPERATION" in
   decompress)
     run_pxb --decompress "--target-dir=$full_dir" --parallel=4
     if [[ -d "$MOUNT_POINT/incremental" ]]; then
-      while IFS= read -r -d '' dir; do run_pxb --decompress "--target-dir=${dir#$ROOTFS}" --parallel=4; done < <(find "$MOUNT_POINT/incremental" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+      while IFS= read -r -d '' dir; do run_pxb --decompress "--target-dir=${dir#$ROOTFS}" --parallel=4; done < <(find "$MOUNT_POINT/incremental" -mindepth 1 -maxdepth 1 -type d ! -name '*.metadata' -print0 | sort -z)
     fi
     result_dir="$full_dir" ;;
   prepare)
     run_pxb --prepare --apply-log-only "--target-dir=$full_dir" --parallel=4
     if [[ -d "$MOUNT_POINT/incremental" ]]; then
-      while IFS= read -r -d '' dir; do run_pxb --prepare --apply-log-only "--target-dir=$full_dir" "--incremental-dir=${dir#$ROOTFS}" --parallel=4; done < <(find "$MOUNT_POINT/incremental" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+      while IFS= read -r -d '' dir; do run_pxb --prepare --apply-log-only "--target-dir=$full_dir" "--incremental-dir=${dir#$ROOTFS}" --parallel=4; done < <(find "$MOUNT_POINT/incremental" -mindepth 1 -maxdepth 1 -type d ! -name '*.metadata' -print0 | sort -z)
     fi
     run_pxb --prepare "--target-dir=$full_dir" --parallel=4
     result_dir="$full_dir" ;;
