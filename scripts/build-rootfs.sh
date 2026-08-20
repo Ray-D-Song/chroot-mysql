@@ -46,12 +46,18 @@ actual_server="$(chroot "$ROOTFS" dpkg-query -W -f='${Version}' mysql-community-
 actual_client="$(chroot "$ROOTFS" dpkg-query -W -f='${Version}' mysql-client)"
 [[ "$actual_server" == "$MYSQL_PACKAGE_VERSION" ]] || { echo "MySQL server version mismatch: $actual_server" >&2; exit 1; }
 [[ "$actual_client" == "$MYSQL_PACKAGE_VERSION" ]] || { echo "MySQL client version mismatch: $actual_client" >&2; exit 1; }
-pxb_archive="$BUILD_DIR/percona-xtrabackup-${PXB_VERSION}.tar.gz"
+pxb_archive="$BUILD_DIR/percona-xtrabackup-${PXB_VERSION}.deb"
 curl -fsSL "$PXB_URL" -o "$pxb_archive"
 echo "${PXB_SHA256}  ${pxb_archive}" | sha256sum -c -
-install -d -m 0755 "$ROOTFS/opt/percona-xtrabackup"
-tar -xzf "$pxb_archive" --strip-components=1 -C "$ROOTFS/opt/percona-xtrabackup"
-[[ -x "$ROOTFS/opt/percona-xtrabackup/bin/xtrabackup" ]] || { echo 'xtrabackup missing from archive' >&2; exit 1; }
+install -D -m 0644 "$pxb_archive" "$ROOTFS/tmp/percona-xtrabackup.deb"
+chroot "$ROOTFS" /bin/bash -ec '
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update
+  apt-get install -y --no-install-recommends /tmp/percona-xtrabackup.deb
+  rm -f /tmp/percona-xtrabackup.deb
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/*
+'
+[[ -x "$ROOTFS/usr/bin/xtrabackup" ]] || { echo 'xtrabackup missing after package install' >&2; exit 1; }
 install -d -m 0755 "$ROOTFS/var/lib/mysql" "$ROOTFS/run/mysqld" "$ROOTFS/dev/shm"
 cat > "$ROOTFS/etc/chroot-mysql-build.env" <<EOF
 MYSQL_SERIES=$MYSQL_SERIES
