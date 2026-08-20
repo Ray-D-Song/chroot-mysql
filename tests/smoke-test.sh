@@ -58,7 +58,9 @@ wait_for_mysql() {
 wait_for_mysql
 mysql_exec -e "create database ci_smoke; create table ci_smoke.MixedCaseRecords(id int primary key, note varchar(32)); insert into ci_smoke.MixedCaseRecords values (1, 'ok'); select * from ci_smoke.mixedcaserecords;"
 BACKUP_SET="$(mktemp -d /tmp/chroot-mysql-pxb-test.XXXXXX)"
-chown "$(stat -c '%u:%g' "$DATA_DIR")" "$BACKUP_SET"
+# Leave mktemp's root ownership in place: the CLI must make a newly-created
+# JarMaster backup-set directory writable by the MySQL process itself.
+[[ "$(stat -c %u "$BACKUP_SET")" == 0 ]] || { echo 'test backup set must start root-owned' >&2; exit 1; }
 pxb_args=("$PREFIX/bin/chroot-mysql-pxb" --rootfs "$PREFIX/rootfs" --data-dir "$DATA_DIR" --credentials-file "$CREDENTIALS" --backup-dir "$BACKUP_SET" --host 127.0.0.1 --port "$PORT" --user "$MYSQL_USER")
 "${pxb_args[@]}" --compress backup-full > "$WORK_DIR/pxb-full.json"
 grep -Fq '"toLSN"' "$WORK_DIR/pxb-full.json"

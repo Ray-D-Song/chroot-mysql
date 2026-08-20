@@ -77,6 +77,8 @@ MYSQL_PASSWORD="$(awk -F= '$1 == "MYSQL_PASSWORD" { print substr($0, index($0, "
 MOUNT_POINT="$ROOTFS/mnt/chroot-mysql-backup"
 DATA_MOUNT_POINT="$ROOTFS/var/lib/mysql"
 DEFAULTS_FILE="$ROOTFS/run/chroot-mysql-pxb.cnf"
+RUN_UID="$(stat -c %u "$DATA_DIR")"
+RUN_GID="$(stat -c %g "$DATA_DIR")"
 mounted_backup=false
 mounted_data=false
 cleanup() {
@@ -92,6 +94,10 @@ if mountpoint -q "$MOUNT_POINT"; then
 fi
 mount --bind "$BACKUP_DIR" "$MOUNT_POINT"
 mounted_backup=true
+# JarMaster creates a new backup-set directory as root.  XtraBackup must run
+# as the MySQL data owner inside the chroot, so hand over that set directory
+# before it creates the full backup and its metadata.
+chown "$RUN_UID:$RUN_GID" "$MOUNT_POINT"
 if mountpoint -q "$DATA_MOUNT_POINT"; then
   echo "data mount point is already in use: $DATA_MOUNT_POINT" >&2
   exit 1
@@ -101,8 +107,6 @@ mounted_data=true
 
 PXB=/usr/bin/xtrabackup
 CHROOT_BACKUP=/mnt/chroot-mysql-backup
-RUN_UID="$(stat -c %u "$DATA_DIR")"
-RUN_GID="$(stat -c %g "$DATA_DIR")"
 escaped_password="${MYSQL_PASSWORD//\\/\\\\}"
 escaped_password="${escaped_password//\"/\\\"}"
 printf '[client]\npassword="%s"\n' "$escaped_password" > "$DEFAULTS_FILE"
