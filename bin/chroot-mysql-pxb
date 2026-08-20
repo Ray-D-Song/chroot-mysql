@@ -75,10 +75,13 @@ MYSQL_PASSWORD="$(awk -F= '$1 == "MYSQL_PASSWORD" { print substr($0, index($0, "
 [[ -n "$MYSQL_PASSWORD" ]] || { echo "credentials file has no MYSQL_PASSWORD: $CREDENTIALS" >&2; exit 1; }
 
 MOUNT_POINT="$ROOTFS/mnt/chroot-mysql-backup"
+DATA_MOUNT_POINT="$ROOTFS/var/lib/mysql"
 DEFAULTS_FILE="$ROOTFS/run/chroot-mysql-pxb.cnf"
 mounted_backup=false
+mounted_data=false
 cleanup() {
   if "$mounted_backup"; then umount "$MOUNT_POINT" || true; fi
+  if "$mounted_data"; then umount "$DATA_MOUNT_POINT" || true; fi
   rm -f "$DEFAULTS_FILE"
 }
 trap cleanup EXIT
@@ -89,6 +92,12 @@ if mountpoint -q "$MOUNT_POINT"; then
 fi
 mount --bind "$BACKUP_DIR" "$MOUNT_POINT"
 mounted_backup=true
+if mountpoint -q "$DATA_MOUNT_POINT"; then
+  echo "data mount point is already in use: $DATA_MOUNT_POINT" >&2
+  exit 1
+fi
+mount --bind "$DATA_DIR" "$DATA_MOUNT_POINT"
+mounted_data=true
 
 PXB=/usr/bin/xtrabackup
 CHROOT_BACKUP=/mnt/chroot-mysql-backup
