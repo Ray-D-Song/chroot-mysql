@@ -7,6 +7,8 @@ source "$ROOT_DIR/versions.env"
 
 [[ -x "$ROOTFS/usr/sbin/mysqld" ]] || { echo 'mysqld missing from rootfs' >&2; exit 1; }
 [[ -x "$ROOTFS/usr/bin/mysql" ]] || { echo 'mysql client missing from rootfs' >&2; exit 1; }
+[[ -x "$ROOTFS/usr/bin/mysqldump" ]] || { echo 'mysqldump client missing from rootfs' >&2; exit 1; }
+[[ -x "$ROOTFS/usr/bin/mysqlbinlog" ]] || { echo 'mysqlbinlog client missing from rootfs' >&2; exit 1; }
 [[ -x "$ROOTFS/usr/bin/xtrabackup" ]] || { echo 'xtrabackup missing from rootfs' >&2; exit 1; }
 chroot "$ROOTFS" /usr/bin/env LD_LIBRARY_PATH=/usr/lib/private /usr/bin/xtrabackup --version >/dev/null
 server_version="$(chroot "$ROOTFS" dpkg-query -W -f='${Version}' mysql-community-server)"
