@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask "$(printf '%04o' "$(( $(umask) | 0022 ))")"
 
 PREFIX=/opt/chroot-mysql
 DATA_DIR=/var/lib/chroot-mysql/data
