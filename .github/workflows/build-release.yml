@@ -29,8 +29,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y debootstrap gnupg
       - name: Verify installation layout safety
         run: bash tests/install-layout-test.sh
       - name: Check installation scripts
@@ -40,8 +38,17 @@ jobs:
         run: |
           test -n '${{ inputs.tag }}'
           case '${{ inputs.tag }}' in v*) ;; *) echo 'manual release tag must start with v' >&2; exit 1;; esac
-      - name: Build rootfs
-        run: sudo -E bash scripts/build-rootfs.sh
+      - name: Reuse the pinned MySQL and XtraBackup rootfs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          base=chroot-mysql-v0.1.16-linux-amd64
+          mkdir -p base-bundle build
+          gh release download v0.1.16 --repo "$GITHUB_REPOSITORY" --dir base-bundle \
+            --pattern "$base.tar.gz" --pattern SHA256SUMS
+          (cd base-bundle && sha256sum --check SHA256SUMS)
+          sudo tar --numeric-owner --strip-components=1 -xzf "base-bundle/$base.tar.gz" \
+            -C build "$base/rootfs"
       - name: Verify rootfs
         run: sudo bash tests/verify-rootfs.sh build/rootfs
       - name: Create offline package
@@ -63,6 +70,10 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
+      - name: Set production permissions on disposable test directories
+        run: |
+          sudo chown root:root /opt /home
+          sudo chmod go-w /opt /home
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
