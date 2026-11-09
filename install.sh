@@ -149,6 +149,8 @@ cleanup_mounts() {
 }
 
 if systemctl is-active --quiet "$SERVICE_NAME"; then systemctl stop "$SERVICE_NAME"; fi
+layout_check_mounts
+install -d -o root -g root -m 0755 -- "$PREFIX"
 mkdir -p "$PREFIX" "$DATA_DIR" "$(dirname "$CREDENTIALS")"
 chmod 0750 "$(dirname "$CREDENTIALS")"
 chown "$RUN_UID:$RUN_GID" "$DATA_DIR"
