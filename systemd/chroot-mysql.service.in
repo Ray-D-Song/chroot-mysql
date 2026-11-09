@@ -1,6 +1,7 @@
 [Unit]
 Description=chroot-mysql MySQL 8.4
 After=network.target local-fs.target
+RequiresMountsFor=@PREFIX@ @DATA_DIR@
 
 [Service]
 Type=simple

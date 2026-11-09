@@ -119,6 +119,9 @@ done
 [[ "$CREDENTIALS" == /* && "$CREDENTIALS" != / ]] || { echo 'credentials-file must be a non-root absolute path' >&2; exit 2; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/install-layout.sh"
+layout_component=mysql
+layout_prepare
 SOURCE_ROOTFS="$SCRIPT_DIR/rootfs"
 [[ -x "$SOURCE_ROOTFS/usr/sbin/mysqld" ]] || { echo "rootfs is missing from $SOURCE_ROOTFS" >&2; exit 1; }
 resolve_lower_case_table_names
@@ -172,6 +175,7 @@ EOF
 chown root:root "$PREFIX/rootfs/etc/mysql/chroot-mysql.cnf"
 chmod 0644 "$PREFIX/rootfs/etc/mysql/chroot-mysql.cnf"
 
+layout_apply
 if [[ ! -d "$DATA_DIR/mysql" ]]; then
   resolve_password_for_new_install
   sql_password="$(escape_sql_string "$password")"
@@ -210,7 +214,9 @@ fi
 
 sed -e "s|@PREFIX@|$PREFIX|g" -e "s|@DATA_DIR@|$DATA_DIR|g" -e "s|@RUN_UID@|$RUN_UID|g" -e "s|@RUN_GID@|$RUN_GID|g" \
   "$SCRIPT_DIR/systemd/chroot-mysql.service.in" > "/etc/systemd/system/$SERVICE_NAME.service"
+layout_finish
 systemctl daemon-reload
+layout_check_service
 systemctl enable "$SERVICE_NAME"
 systemctl start "$SERVICE_NAME"
 echo "Installed $SERVICE_NAME. Check: systemctl status $SERVICE_NAME"

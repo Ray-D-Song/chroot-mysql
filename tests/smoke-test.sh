@@ -10,9 +10,44 @@ SERVICE="chroot-mysql-test-$TEST_ID"
 PORT="$(( 20000 + RANDOM % 20000 ))"
 CREDENTIALS="/etc/chroot-mysql-test-$TEST_ID/credentials"
 PACKAGE_DIR=''
+if [[ "${CHROOT_TEST_LAYOUT:-legacy}" == home ]]; then
+  [[ "$TEST_ID" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo "invalid home test id" >&2; exit 2; }
+  TEST_HOME="/home/chroot-mysql-test-$TEST_ID"
+  [[ ! -e "$TEST_HOME" ]] || { echo "home test directory already exists" >&2; exit 1; }
+  install -d -o root -g root -m 0755 "$TEST_HOME"
+  PREFIX="$TEST_HOME/runtime"
+  DATA_DIR="$TEST_HOME/data"
+  CREDENTIALS="$TEST_HOME/conf/credentials"
+  source "$(dirname "${BASH_SOURCE[0]}")/../install-layout.sh"
+  layout_component=mysql
+  if layout_selinux_enabled; then
+    layout_rule "$TEST_HOME" usr_t
+    restorecon -F "$TEST_HOME"
+  else
+    status=$?
+    [[ "$status" == 1 ]] || exit "$status"
+  fi
+fi
 BACKUP_SET=''
 
+cleanup_home_fixture() {
+  [[ -n "${TEST_HOME:-}" ]] || return 0
+  systemctl stop "$SERVICE" 2>/dev/null || true
+  systemctl disable "$SERVICE" 2>/dev/null || true
+  rm -rf -- "$TEST_HOME"
+  if command -v semanage >/dev/null 2>&1; then
+    local rules pattern remainder
+    rules="$(semanage fcontext -l -C 2>/dev/null || true)"
+    while read -r pattern remainder; do
+      [[ "$pattern" != "$TEST_HOME"* ]] || semanage fcontext -d "$pattern" || true
+    done <<< "$rules"
+  fi
+}
+
 cleanup() {
+  if [[ -n "${TEST_HOME:-}" ]]; then
+    echo "Cleaning isolated home fixture: $TEST_HOME"
+  fi
   if [[ -n "$PACKAGE_DIR" && -x "$PACKAGE_DIR/uninstall.sh" ]]; then
     "$PACKAGE_DIR/uninstall.sh" --prefix "$PREFIX" --data-dir "$DATA_DIR" --service-name "$SERVICE" --credentials-file "$CREDENTIALS" --purge-data || true
   fi
@@ -20,7 +55,7 @@ cleanup() {
   umount "$PREFIX/rootfs/var/lib/mysql" 2>/dev/null || true
   rm -rf "$PREFIX" "$DATA_DIR" "$BACKUP_SET" "$(dirname "$CREDENTIALS")" "$WORK_DIR"
 }
-trap cleanup EXIT
+trap 'status=$?; cleanup; cleanup_home_fixture; exit "$status"' EXIT
 
 [[ $EUID -eq 0 ]] || { echo 'smoke test requires root' >&2; exit 1; }
 tar -xzf "$BUNDLE" -C "$WORK_DIR"
@@ -103,7 +138,7 @@ custom_cleanup() {
   umount "$CUSTOM_PREFIX/rootfs/var/lib/mysql" 2>/dev/null || true
   rm -rf "$CUSTOM_PREFIX" "$CUSTOM_DATA_DIR" "$(dirname "$CUSTOM_CREDENTIALS")"
 }
-trap custom_cleanup EXIT
+trap 'status=$?; custom_cleanup; cleanup_home_fixture; exit "$status"' EXIT
 
 CHROOT_MYSQL_PASSWORD="$CUSTOM_PASSWORD" "$PACKAGE_DIR/install.sh" \
   --prefix "$CUSTOM_PREFIX" --data-dir "$CUSTOM_DATA_DIR" --service-name "$CUSTOM_SERVICE" \
@@ -128,6 +163,7 @@ wait_for_mysql "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$MYSQL_USER" "$MYSQL_PASSWORD"
 mysql_exec "$CUSTOM_PREFIX" "$CUSTOM_PORT" "$MYSQL_USER" "$MYSQL_PASSWORD" -Nse 'select 1' | grep -Fx 1
 
 custom_cleanup
+cleanup_home_fixture
 trap - EXIT
 
 echo 'chroot-mysql smoke test passed'

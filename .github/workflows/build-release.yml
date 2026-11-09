@@ -31,6 +31,10 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y debootstrap gnupg
+      - name: Verify installation layout safety
+        run: bash tests/install-layout-test.sh
+      - name: Check installation scripts
+        run: bash -n install.sh uninstall.sh install-layout.sh scripts/package.sh
       - name: Validate manual release input
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.release }}
         run: |
@@ -75,9 +79,15 @@ jobs:
         run: (cd dist && sha256sum --check SHA256SUMS)
       - name: Run real service smoke test
         run: sudo -E bash tests/smoke-test.sh "$(find dist -name 'chroot-mysql-*-linux-amd64.tar.gz' -print -quit)" "$GITHUB_RUN_ID"
+      - name: Verify home installation, reinstall and uninstall
+        env:
+          CHROOT_TEST_LAYOUT: home
+        run: sudo -E bash tests/smoke-test.sh "$(find dist -name 'chroot-mysql-*-linux-amd64.tar.gz' -print -quit)" "$GITHUB_RUN_ID"
 
   verify-centos7-kernel310:
     name: Verify on self-hosted CentOS 7 / kernel 3.10
+    # Temporarily disabled while the dedicated CentOS 7 runner is offline.
+    if: ${{ false }}
     needs: build
     runs-on: [self-hosted, linux, x64, centos7-kernel310-mysql]
     steps:
@@ -101,7 +111,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [verify-ubuntu24, verify-centos7-kernel310]
+    needs: [verify-ubuntu24]
     if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release) }}
     runs-on: ubuntu-24.04
     permissions:
@@ -127,14 +137,13 @@ jobs:
 
   cleanup-artifacts:
     name: Remove artifacts from non-release or failed runs
-    needs: [build, verify-ubuntu24, verify-centos7-kernel310, release]
+    needs: [build, verify-ubuntu24, release]
     if: >-
       ${{
         always() &&
         (
           needs.build.result != 'success' ||
           needs.verify-ubuntu24.result != 'success' ||
-          needs.verify-centos7-kernel310.result != 'success' ||
           needs.release.result == 'failure' ||
           needs.release.result == 'cancelled' ||
           !(
