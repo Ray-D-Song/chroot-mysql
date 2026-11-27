@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
+original_args=("$@")
 
 # Run the PXB bundled inside the MySQL chroot. stdout is deliberately reserved
 # for the final JSON result; PXB's own output is forwarded to stderr.
@@ -50,7 +52,7 @@ while [[ $# -gt 0 ]]; do
       shift ;;
     --compress) COMPRESS=true; shift ;;
     --help|-h) usage; exit 0 ;;
-    backup-full|backup-incremental|decompress|prepare|copy-back)
+    recover|backup-full|backup-incremental|decompress|prepare|copy-back)
       [[ -z "$OPERATION" ]] || { echo 'only one operation is allowed' >&2; exit 2; }
       OPERATION="$1"; shift ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
@@ -71,6 +73,61 @@ if [[ "$OPERATION" == backup-incremental ]]; then
   [[ -n "$RUN_ID" && -n "$BASE_RUN_ID" ]] || { echo 'incremental backup requires --run-id and --base-run-id' >&2; exit 2; }
 fi
 
+
+# Each tool invocation owns its lock and private mount namespace. FD 9 is
+# inherited by tools, so a killed shell cannot unlock a still-running tool.
+ROOTFS="$(readlink -f -- "$ROOTFS")"
+legacy_unmount() {
+  local point="$1" source="$2"
+  while mountpoint -q "$point"; do
+    [[ -e "$source" && "$(stat -Lc '%d:%i' "$point")" == "$(stat -Lc '%d:%i' "$source")" ]] || {
+      echo "refusing unknown backup mount: $point" >&2; return 1;
+    }
+    # No force/lazy unmount: an active user must keep its mount.
+    umount "$point" || return 1
+  done
+}
+if [[ "${JARMASTER_BACKUP_NS:-}" != "$(readlink /proc/self/ns/mnt)" ]]; then
+  install -d -m 0755 "$ROOTFS/run"
+  exec 9>"$ROOTFS/run/jarmaster-backup.lock"
+  chmod 0600 "$ROOTFS/run/jarmaster-backup.lock"
+  flock -n 9 || { echo 'another backup tool is running' >&2; exit 1; }
+  # Older helpers did not acquire this lock. Detect their chroot tools too.
+  for proc in /proc/[0-9]*; do
+    [[ "$(readlink "$proc/root" 2>/dev/null || true)" == "$ROOTFS" ]] || continue
+    executable="$(readlink "$proc/exe" 2>/dev/null || true)"
+    case "${executable##*/}" in xtrabackup|pg_basebackup|pg_receivewal|pg_combinebackup|pg_verifybackup)
+      echo "active backup tool: ${proc##*/}" >&2; exit 1 ;;
+    esac
+  done
+  legacy_unmount "$ROOTFS/mnt/chroot-mysql-backup" "$BACKUP_DIR"
+  legacy_unmount "$ROOTFS/var/lib/mysql" "$DATA_DIR"
+  rm -f "$ROOTFS/run/chroot-mysql-pxb.cnf"
+  if [[ "$OPERATION" == recover ]]; then exit 0; fi
+  exec unshare --mount --propagation private /bin/bash -c '
+    export JARMASTER_BACKUP_NS="$(readlink /proc/self/ns/mnt)"
+    exec "$@"
+  ' -- "$0" "${original_args[@]}"
+fi
+[[ -e /proc/$$/fd/9 ]] || { echo 'backup namespace has no ownership lock' >&2; exit 1; }
+child_pid=''
+run_tool() {
+  "$@" & child_pid=$!
+  local result=0
+  wait "$child_pid" || result=$?
+  child_pid=''
+  return "$result"
+}
+stop_tool() {
+  trap '' TERM INT
+  if [[ -n "$child_pid" ]]; then
+    kill -TERM "$child_pid" 2>/dev/null || true
+    wait "$child_pid" 2>/dev/null || true
+    child_pid=''
+  fi
+  exit 143
+}
+trap stop_tool TERM INT
 MYSQL_PASSWORD="$(awk -F= '$1 == "MYSQL_PASSWORD" { print substr($0, index($0, "=") + 1); exit }' "$CREDENTIALS")"
 [[ -n "$MYSQL_PASSWORD" ]] || { echo "credentials file has no MYSQL_PASSWORD: $CREDENTIALS" >&2; exit 1; }
 
@@ -82,9 +139,13 @@ RUN_GID="$(stat -c %g "$DATA_DIR")"
 mounted_backup=false
 mounted_data=false
 cleanup() {
-  if "$mounted_backup"; then umount "$MOUNT_POINT" || true; fi
-  if "$mounted_data"; then umount "$DATA_MOUNT_POINT" || true; fi
-  rm -f "$DEFAULTS_FILE"
+  local result=$? cleanup_result=0
+  trap - EXIT
+  if "$mounted_backup"; then umount "$MOUNT_POINT" || cleanup_result=1; fi
+  if "$mounted_data"; then umount "$DATA_MOUNT_POINT" || cleanup_result=1; fi
+  rm -f "$DEFAULTS_FILE" || cleanup_result=1
+  if (( result == 0 )); then result=$cleanup_result; fi
+  exit "$result"
 }
 trap cleanup EXIT
 install -d -m 0755 "$MOUNT_POINT"
@@ -114,7 +175,7 @@ chown "$RUN_UID:$RUN_GID" "$DEFAULTS_FILE"
 chmod 0600 "$DEFAULTS_FILE"
 
 run_pxb() {
-  LD_LIBRARY_PATH=/usr/lib/private chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" "$PXB" --defaults-extra-file=/run/chroot-mysql-pxb.cnf "$@" >&2
+  LD_LIBRARY_PATH=/usr/lib/private run_tool chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" "$PXB" --defaults-extra-file=/run/chroot-mysql-pxb.cnf "$@" >&2
 }
 
 # PXB 8.4 compresses its checkpoint and binlog metadata with the data files.
@@ -122,7 +183,7 @@ run_pxb() {
 # incremental run can read its base LSN without expanding the full backup.
 capture_metadata() {
   local source="$1"
-  chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" /bin/bash -ec '
+  run_tool chroot --userspec="$RUN_UID:$RUN_GID" "$ROOTFS" /bin/bash -ec '
     source="$1"
     metadata="${source}.metadata"
     mkdir -p "$metadata"
